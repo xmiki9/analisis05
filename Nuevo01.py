@@ -2247,14 +2247,17 @@ with PdfPages(PDF_NAME) as pdf:
     drift_x_levels = drift_profile['ratio_x'] * 100
     drift_y_levels = drift_profile['ratio_y'] * 100
     if floors.size > 0:
+        floors_plot = np.insert(floors, 0, 0)
+        drift_x_plot = np.insert(drift_x_levels, 0, 0.0)
+        drift_y_plot = np.insert(drift_y_levels, 0, 0.0)
         ax.set_yticks(floors)
-        ax.set_ylim(0.5, floors.max() + 0.5)
-    ax.set_xlabel('Distorsión de entrepiso [%]')
-    ax.set_ylabel('Piso')
-    ax.grid(True, axis='both', ls=':', alpha=0.5)
+        ax.set_ylim(0.0, floors_plot.max() + 0.5)
+        ax.set_xlabel('Distorsión de entrepiso [%]')
+        ax.set_ylabel('Piso')
+        ax.grid(True, axis='both', ls=':', alpha=0.5)
     if floors.size > 0:
-        ax.plot(drift_x_levels, floors, marker='o', color='tab:orange', lw=2.2, label='Dirección X')
-        ax.plot(drift_y_levels, floors, marker='s', color='tab:blue', lw=2.2, label='Dirección Y')
+        ax.plot(drift_x_plot, floors_plot, marker='o', color='tab:orange', lw=2.2, label='Dirección X')
+        ax.plot(drift_y_plot, floors_plot, marker='s', color='tab:blue', lw=2.2, label='Dirección Y')
         max_val = max(np.max(np.abs(drift_x_levels)), np.max(np.abs(drift_y_levels)), 0.0)
         if max_val <= 0.0:
             max_val = 0.1
