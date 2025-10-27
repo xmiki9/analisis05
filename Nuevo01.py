@@ -1418,14 +1418,27 @@ if nz in displacement_envelope:
 
 max_drift_ratio_x = 0.0
 max_drift_ratio_y = 0.0
+drift_profile = {
+    'floors': np.arange(1, nz+1, dtype=int) if nz > 0 else np.array([], dtype=int),
+    'ratio_x': [],
+    'ratio_y': []
+}
 for iz in range(1, nz+1):
     env = drift_envelope[iz]
     drift_x = max(abs(env['X_max']), abs(env['X_min']))
     drift_y = max(abs(env['Y_max']), abs(env['Y_min']))
-    h = H[iz-1] if iz-1 < len(H) else 1.0
-    if h > 0:
-        max_drift_ratio_x = max(max_drift_ratio_x, drift_x / h)
-        max_drift_ratio_y = max(max_drift_ratio_y, drift_y / h)
+    h = H[iz-1] if (iz-1) < len(H) and len(H) > 0 else 1.0
+    if h <= 0:
+        ratio_x = ratio_y = 0.0
+    else:
+        ratio_x = drift_x / h
+        ratio_y = drift_y / h
+        max_drift_ratio_x = max(max_drift_ratio_x, ratio_x)
+        max_drift_ratio_y = max(max_drift_ratio_y, ratio_y)
+    drift_profile['ratio_x'].append(ratio_x)
+    drift_profile['ratio_y'].append(ratio_y)
+drift_profile['ratio_x'] = np.array(drift_profile['ratio_x'], dtype=float)
+drift_profile['ratio_y'] = np.array(drift_profile['ratio_y'], dtype=float)
 
 base_shear_x = abs(modal_X['base_shear'])
 base_shear_y = abs(modal_Y['base_shear'])
@@ -2007,6 +2020,8 @@ for (ele, ix, iy, iz) in columns_sorted:
     _append_plan(f'Columna ele {ele} - Propiedades', tag, level=2)
     _append_plan(f'Columna ele {ele} - Diagramas', tag, level=2)
 
+_append_plan('Derivas de Entrepiso', 'Distorsiones máximas en direcciones X e Y', level=1)
+
 
 plan_iter = iter(page_outline_plan)
 
@@ -2218,6 +2233,40 @@ with PdfPages(PDF_NAME) as pdf:
         finalize_page(pdf, fig1, page_info)
         page_info = next(plan_iter)
         finalize_page(pdf, fig2, page_info)
+
+    page_info = next(plan_iter)
+    fig = plt.figure(figsize=(8.27, 11.69))
+    apply_page_margins(fig)
+    fig.suptitle('Derivas de entrepiso', fontsize=14, weight='bold', y=PAGE_HEADER_Y)
+    fig.text((PAGE_LEFT + PAGE_RIGHT) / 2, PAGE_SUBHEADER_Y,
+             'Distorsiones máximas relativas por nivel',
+             ha='center', va='center', fontsize=11)
+    fig.subplots_adjust(top=PAGE_SUBHEADER_Y - 0.08)
+    ax = fig.add_subplot(1, 1, 1)
+    floors = drift_profile['floors']
+    drift_x_levels = drift_profile['ratio_x'] * 100
+    drift_y_levels = drift_profile['ratio_y'] * 100
+    if floors.size > 0:
+        ax.set_yticks(floors)
+        ax.set_ylim(0.5, floors.max() + 0.5)
+    ax.set_xlabel('Distorsión de entrepiso [%]')
+    ax.set_ylabel('Piso')
+    ax.grid(True, axis='both', ls=':', alpha=0.5)
+    if floors.size > 0:
+        ax.plot(drift_x_levels, floors, marker='o', color='tab:orange', lw=2.2, label='Dirección X')
+        ax.plot(drift_y_levels, floors, marker='s', color='tab:blue', lw=2.2, label='Dirección Y')
+        max_val = max(np.max(np.abs(drift_x_levels)), np.max(np.abs(drift_y_levels)), 0.0)
+        if max_val <= 0.0:
+            max_val = 0.1
+        ax.set_xlim(0.0, max_val * 1.15)
+        ax.legend(loc='best')
+    else:
+        ax.text(0.5, 0.5, 'Sin niveles definidos', ha='center', va='center', transform=ax.transAxes)
+    register_figure(('drift_profile', 'xy'), 'Deriva máxima de entrepiso en direcciones X e Y')
+    ax.text(0.5, -FIGURE_CAPTION_GAP,
+            figure_caption(('drift_profile', 'xy')),
+            transform=ax.transAxes, ha='center', va='top', fontsize=9)
+    finalize_page(pdf, fig, page_info)
 
 try:
     extra_info = next(plan_iter)
