@@ -197,8 +197,14 @@ qd_extra   = q_acab + q_tabiq + q_losa      # DL de piso adicional (sin vigas/co
 # ¿Qué niveles reciben las cargas de piso? (p.ej. todos)
 loaded_levels = list(range(1, nz+1))        # [1..nz]
 
+# Conversión de unidades base
+MPA_TO_KGF_CM2 = 10.197162129779
+KGF_CM2_TO_MPA = 1.0 / MPA_TO_KGF_CM2
+
 # Secciónes (para modelo y dibujo)
-E, nu = 25e6, 0.20
+E_conc_MPa = 25000.0
+E_conc_kgf_cm2 = E_conc_MPa * MPA_TO_KGF_CM2
+E, nu = E_conc_MPa * 1000.0, 0.20
 G      = E/(2*(1+nu))
 
 # Columnas (sección rectangular b×h) — para 3D
@@ -220,29 +226,48 @@ Jbeam  = 1e-3
 beam_plan_width = 0.25
 
 # Diseño de columnas (materiales y refuerzo)
-fc_col = 28.0          # MPa
-fy_col = 420.0         # MPa
-Es_col = 200000.0      # MPa
+fc_col_kgf_cm2 = 28.0 * MPA_TO_KGF_CM2    # kg/cm²
+fy_col_kgf_cm2 = 420.0 * MPA_TO_KGF_CM2   # kg/cm²
+Es_col_kgf_cm2 = 200000.0 * MPA_TO_KGF_CM2  # kg/cm²
+fc_col = fc_col_kgf_cm2 * KGF_CM2_TO_MPA
+fy_col = fy_col_kgf_cm2 * KGF_CM2_TO_MPA
+Es_col = Es_col_kgf_cm2 * KGF_CM2_TO_MPA
 clear_cover_col = 0.04 # m (cara de concreto a estribo)
 stirrup_diam = 0.010   # m
-bar_diam_main = 0.016  # m (aprox. barra 5/8")
+bar_diam_main = 0.015875  # m (barra 5/8")
 n_bars_main = 8
 phi_axial_col = 0.65   # factor resistencia para columna arriostrada
 eps_cu = 0.003
 
 # Diseño de vigas (materiales y opciones de refuerzo)
-fc_beam = 28.0         # MPa
-fy_beam = 420.0        # MPa
+fc_beam_kgf_cm2 = 28.0 * MPA_TO_KGF_CM2   # kg/cm²
+fy_beam_kgf_cm2 = 420.0 * MPA_TO_KGF_CM2  # kg/cm²
+fc_beam = fc_beam_kgf_cm2 * KGF_CM2_TO_MPA
+fy_beam = fy_beam_kgf_cm2 * KGF_CM2_TO_MPA
 phi_flex_beam = 0.90   # ACI 318 flexión controlada
 clear_cover_beam = 0.04    # m
 stirrup_diam_beam = 0.010  # m
 
 beam_bar_sizes = {
     'N4': 0.0127,
-    'N5': 0.0159,
-    'N6': 0.0190,
+    'N5': 0.015875,
+    'N6': 0.01905,
     'N8': 0.0254,
 }
+
+REBAR_DIAMETER_LABELS = [
+    (0.0127, '1/2"'),
+    (0.015875, '5/8"'),
+    (0.01905, '3/4"'),
+    (0.0254, '1"'),
+]
+
+
+def bar_diameter_label(diam):
+    best = min(REBAR_DIAMETER_LABELS, key=lambda item: abs(item[0] - diam))
+    if abs(best[0] - diam) <= 5e-4:
+        return best[1]
+    return f"{diam * 1000:.0f} mm"
 
 # Soportes en base
 base_fix = (1,1,1,1,1,1)
@@ -616,7 +641,7 @@ def build_beam_rebar_options():
     for size, diam in beam_bar_sizes.items():
         area_bar = 0.25 * np.pi * diam**2
         for count in range(2, 7):
-            label = f"{count}{size}"
+            label = f"{count}Ø{bar_diameter_label(diam)}"
             options.append({
                 'label': label,
                 'size': size,
@@ -629,8 +654,6 @@ def build_beam_rebar_options():
 
 
 beam_rebar_options = build_beam_rebar_options()
-
-MPA_TO_KGF_CM2 = 10.197162129779
 
 
 def build_column_rebar_layout(b, h, cover, stirrup, bar_diam, n_bars):
@@ -663,7 +686,7 @@ def plot_column_section(ax, b, h, cover, stirrup, bar_diam, layout):
         circ = Circle((bar['y'], bar['z']), bar_diam / 2.0, color='tab:blue', ec='k', lw=0.6)
         ax.add_patch(circ)
 
-    steel_note = f"{len(layout)}Ø{bar_diam*1000:.0f}"
+    steel_note = f"{len(layout)}Ø{bar_diameter_label(bar_diam)}"
     ax.text(0.0, half_h + 0.05 * h, steel_note, ha='center', va='bottom',
             fontsize=8.6, color='tab:blue', weight='bold')
     ax.set_aspect('equal', adjustable='box')
@@ -711,7 +734,7 @@ def plot_beam_section(ax, width, depth, cover, stirrup, bottom_opt, top_opt):
     def annotate_face(count, diam, z_coord, valign):
         if count <= 0:
             return
-        note = f"{count}Ø{diam*1000:.0f}"
+        note = f"{count}Ø{bar_diameter_label(diam)}"
         ax.text(0.0, z_coord + (0.04 if valign == 'bottom' else -0.04) * depth,
                 note, ha='center', va=valign, fontsize=9, color='tab:blue', weight='bold')
 
@@ -1418,14 +1441,27 @@ if nz in displacement_envelope:
 
 max_drift_ratio_x = 0.0
 max_drift_ratio_y = 0.0
+drift_profile = {
+    'floors': np.arange(1, nz+1, dtype=int) if nz > 0 else np.array([], dtype=int),
+    'ratio_x': [],
+    'ratio_y': []
+}
 for iz in range(1, nz+1):
     env = drift_envelope[iz]
     drift_x = max(abs(env['X_max']), abs(env['X_min']))
     drift_y = max(abs(env['Y_max']), abs(env['Y_min']))
-    h = H[iz-1] if iz-1 < len(H) else 1.0
-    if h > 0:
-        max_drift_ratio_x = max(max_drift_ratio_x, drift_x / h)
-        max_drift_ratio_y = max(max_drift_ratio_y, drift_y / h)
+    h = H[iz-1] if (iz-1) < len(H) and len(H) > 0 else 1.0
+    if h <= 0:
+        ratio_x = ratio_y = 0.0
+    else:
+        ratio_x = drift_x / h
+        ratio_y = drift_y / h
+        max_drift_ratio_x = max(max_drift_ratio_x, ratio_x)
+        max_drift_ratio_y = max(max_drift_ratio_y, ratio_y)
+    drift_profile['ratio_x'].append(ratio_x)
+    drift_profile['ratio_y'].append(ratio_y)
+drift_profile['ratio_x'] = np.array(drift_profile['ratio_x'], dtype=float)
+drift_profile['ratio_y'] = np.array(drift_profile['ratio_y'], dtype=float)
 
 base_shear_x = abs(modal_X['base_shear'])
 base_shear_y = abs(modal_Y['base_shear'])
@@ -1441,8 +1477,8 @@ mass_ratio_total_X_pct = mass_ratio_total_X * 100
 mass_ratio_total_Y_pct = mass_ratio_total_Y * 100
 drift_x_pct = max_drift_ratio_x * 100
 drift_y_pct = max_drift_ratio_y * 100
-roof_disp_x_mm = roof_disp_x * 1000
-roof_disp_y_mm = roof_disp_y * 1000
+roof_disp_x_m = roof_disp_x
+roof_disp_y_m = roof_disp_y
 # ------------------ RESPUESTAS Y DIBUJOS ------------------
 def ele_nodes(e):
     i,j = ops.eleNodes(e)
@@ -1690,7 +1726,7 @@ def draw_beam_design_block(fig, slot_spec, ele, tag_txt):
     ax_info.axis('off')
     ax_info.set_anchor('N')
     info_lines = [
-        f"fc'={fc_beam:.1f} MPa, fy={fy_beam:.0f} MPa, ϕ={phi_flex_beam:.2f}",
+        f"fc'={fc_beam_kgf_cm2:.1f} kg/cm², fy={fy_beam_kgf_cm2:.0f} kg/cm², ϕ={phi_flex_beam:.2f}",
         f"Sección {sec_beam_b:.2f}×{sec_beam_h:.2f} m",
         f"Recubrimiento={clear_cover_beam*1000:.0f} mm",
         f"Mu(+)= {design['Mu_pos']:.2f} t-m  Mu(-)= {design['Mu_neg']:.2f} t-m",
@@ -1902,9 +1938,9 @@ def page_column_design(ele, tag_txt):
     ax_info.set_anchor('N')
     info_lines = [
         f"Ubicación: nivel {summary['nivel_bottom']} → {summary['nivel_top']} | z={summary['z_bottom']:.2f}→{summary['z_top']:.2f} m",
-        f"fc'={fc_col:.1f} MPa, fy={fy_col:.0f} MPa, Es={Es_col/1000:.0f} GPa",
+        f"fc'={fc_col_kgf_cm2:.1f} kg/cm², fy={fy_col_kgf_cm2:.0f} kg/cm², Es={Es_col_kgf_cm2:,.0f} kg/cm²",
         f"Sección {sec_col_b:.2f}×{sec_col_h:.2f} m  Recubrimiento={clear_cover_col*1000:.0f} mm",
-        f"Refuerzo: {n_bars_main} barras Ø{bar_diam_main*1000:.0f} mm (As={As_total_col*1e4:.2f} cm², ρ={rho_long_col*100:.2f}%)",
+        f"Refuerzo: {n_bars_main} barras Ø{bar_diameter_label(bar_diam_main)} (As={As_total_col*1e4:.2f} cm², ρ={rho_long_col*100:.2f}%)",
         f"ϕPn0={phiPn0_ton:.2f} t  Pu,max={summary['Pu_max_comp']:.2f} t  Pu,min={summary['Pu_min_ten']:.2f} t",
         f"Índice max Bresler={summary['max_ratio']:.2f} ({'OK' if summary['ok'] else 'No cumple'})"
     ]
@@ -2007,6 +2043,8 @@ for (ele, ix, iy, iz) in columns_sorted:
     _append_plan(f'Columna ele {ele} - Propiedades', tag, level=2)
     _append_plan(f'Columna ele {ele} - Diagramas', tag, level=2)
 
+_append_plan('Derivas de Entrepiso', 'Distorsiones máximas en direcciones X e Y', level=1)
+
 
 plan_iter = iter(page_outline_plan)
 
@@ -2046,7 +2084,7 @@ with PdfPages(PDF_NAME) as pdf:
         f"El peso sísmico equivalente asciende a {total_weight_ton:.2f} t (masa={total_mass_ton:.2f} t) con ψ_live={psi_live:.2f}. "
         f"Los parámetros del espectro E.030 son Z={Z_sismo:.2f}, U={U_importancia:.2f}, S={S_suelo:.2f}, R={R_respuesta:.2f}, Tp={Tp:.2f} s y Tl={Tl:.2f} s. "
         f"Los modos fundamentales resultan T₁x={Tx1:.3f} s y T₁y={Ty1:.3f} s, con participaciones de masa de {mode_mass_x_pct:.1f}% y {mode_mass_y_pct:.1f}% (acumulado {mass_ratio_total_X_pct:.1f}% y {mass_ratio_total_Y_pct:.1f}%). "
-        f"Los cortantes basales son Vbx={base_shear_x_ton:.2f} t y Vby={base_shear_y_ton:.2f} t, mientras que las derivas máximas de entrepiso alcanzan {drift_x_pct:.2f}% en X y {drift_y_pct:.2f}% en Y con desplazamientos de cubierta Δtecho-X={roof_disp_x_mm:.1f} mm y Δtecho-Y={roof_disp_y_mm:.1f} mm."
+        f"Los cortantes basales son Vbx={base_shear_x_ton:.2f} t y Vby={base_shear_y_ton:.2f} t, mientras que las derivas máximas de entrepiso alcanzan {drift_x_pct:.2f}% en X y {drift_y_pct:.2f}% en Y con desplazamientos de cubierta Δtecho-X={roof_disp_x_m:.4f} m y Δtecho-Y={roof_disp_y_m:.4f} m."
     )
 
     wrapped_paragraphs = [textwrap.fill(p, width=110) for p in (paragraph_1, paragraph_2, paragraph_3)]
@@ -2185,8 +2223,8 @@ with PdfPages(PDF_NAME) as pdf:
         summary_text = [
             "Metodología: aproximación de Bresler basada en ACI 318-19 (ecuación 22.5.1.2).",
             f"Sección rectangular {sec_col_b:.2f} x {sec_col_h:.2f} m con refuerzo uniforme.",
-            f"Refuerzo adoptado: {n_bars_main} barras diam.{bar_diam_main*1000:.0f} mm (As={As_total_col*1e4:.2f} cm², ρ={rho_long_col*100:.2f}%).",
-            f"Materiales: fc'={fc_col:.1f} MPa, fy={fy_col:.0f} MPa; factor phi_axial={phi_axial_col:.2f}.",
+            f"Refuerzo adoptado: {n_bars_main} barras Ø{bar_diameter_label(bar_diam_main)} (As={As_total_col*1e4:.2f} cm², ρ={rho_long_col*100:.2f}%).",
+            f"Materiales: fc'={fc_col_kgf_cm2:.1f} kg/cm², fy={fy_col_kgf_cm2:.0f} kg/cm²; factor phi_axial={phi_axial_col:.2f}.",
             f"Capacidad axial factorizada: phiPn0={phiPn0_ton:.2f} t."
         ]
         gs_summary = fig.add_gridspec(2, 1, height_ratios=[0.35, 0.65], hspace=0.05)
@@ -2218,6 +2256,43 @@ with PdfPages(PDF_NAME) as pdf:
         finalize_page(pdf, fig1, page_info)
         page_info = next(plan_iter)
         finalize_page(pdf, fig2, page_info)
+
+    page_info = next(plan_iter)
+    fig = plt.figure(figsize=(8.27, 11.69))
+    apply_page_margins(fig)
+    fig.suptitle('Derivas de entrepiso', fontsize=14, weight='bold', y=PAGE_HEADER_Y)
+    fig.text((PAGE_LEFT + PAGE_RIGHT) / 2, PAGE_SUBHEADER_Y,
+             'Distorsiones máximas relativas por nivel',
+             ha='center', va='center', fontsize=11)
+    fig.subplots_adjust(top=PAGE_SUBHEADER_Y - 0.08)
+    ax = fig.add_subplot(1, 1, 1)
+    floors = drift_profile['floors']
+    drift_x_levels = drift_profile['ratio_x'] * 100
+    drift_y_levels = drift_profile['ratio_y'] * 100
+    if floors.size > 0:
+        floors_plot = np.insert(floors, 0, 0)
+        drift_x_plot = np.insert(drift_x_levels, 0, 0.0)
+        drift_y_plot = np.insert(drift_y_levels, 0, 0.0)
+        ax.set_yticks(floors)
+        ax.set_ylim(0.0, floors_plot.max() + 0.5)
+        ax.set_xlabel('Distorsión de entrepiso [%]')
+        ax.set_ylabel('Piso')
+        ax.grid(True, axis='both', ls=':', alpha=0.5)
+    if floors.size > 0:
+        ax.plot(drift_x_plot, floors_plot, marker='o', color='tab:orange', lw=2.2, label='Dirección X')
+        ax.plot(drift_y_plot, floors_plot, marker='s', color='tab:blue', lw=2.2, label='Dirección Y')
+        max_val = max(np.max(np.abs(drift_x_levels)), np.max(np.abs(drift_y_levels)), 0.0)
+        if max_val <= 0.0:
+            max_val = 0.1
+        ax.set_xlim(0.0, max_val * 1.15)
+        ax.legend(loc='best')
+    else:
+        ax.text(0.5, 0.5, 'Sin niveles definidos', ha='center', va='center', transform=ax.transAxes)
+    register_figure(('drift_profile', 'xy'), 'Deriva máxima de entrepiso en direcciones X e Y')
+    ax.text(0.5, -FIGURE_CAPTION_GAP,
+            figure_caption(('drift_profile', 'xy')),
+            transform=ax.transAxes, ha='center', va='top', fontsize=9)
+    finalize_page(pdf, fig, page_info)
 
 try:
     extra_info = next(plan_iter)
